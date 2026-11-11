@@ -2,10 +2,13 @@ import random
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import duckdb
 import pandas as pd
 
 SOURCE_FILE_COUNT = 3
 ROWS_PER_FILE = 100
+
+# A fixed seed and start time make the input rows reproducible.
 RANDOM_SEED = 42
 FIRST_EVENT_TIME = datetime(2025, 1, 1, tzinfo=UTC)
 
@@ -16,6 +19,7 @@ def generate_input_files(input_directory: Path) -> list[Path]:
     input_files = []
 
     for file_index in range(SOURCE_FILE_COUNT):
+        # Give each file its own range of event IDs.
         first_event_id = file_index * ROWS_PER_FILE + 1
         rows = []
         for event_id in range(first_event_id, first_event_id + ROWS_PER_FILE):
@@ -39,6 +43,7 @@ def generate_input_files(input_directory: Path) -> list[Path]:
 
 
 def compact_with_pandas(input_files: list[Path], output_file: Path) -> int:
+    # This baseline holds the source DataFrames and the combined result in memory.
     dataframes = [pd.read_parquet(path, engine="pyarrow") for path in input_files]
     compacted = pd.concat(dataframes, ignore_index=True)
     compacted.to_parquet(
@@ -47,12 +52,33 @@ def compact_with_pandas(input_files: list[Path], output_file: Path) -> int:
     return len(compacted)
 
 
+def compact_with_duckdb(input_files: list[Path], output_file: Path) -> None:
+    # DuckDB can stream rows from the Parquet scan directly to the output writer.
+    with duckdb.connect() as connection:
+        connection.execute(
+            """
+            COPY (SELECT * FROM read_parquet($input_files))
+            TO $output_file (FORMAT PARQUET, COMPRESSION SNAPPY)
+            """,
+            {
+                "input_files": [str(path) for path in input_files],
+                "output_file": str(output_file),
+            },
+        )
+
+
 def main() -> None:
     data_directory = Path(__file__).resolve().parent / "benchmark_data"
     input_files = generate_input_files(data_directory / "inputs")
-    output_file = data_directory / "pandas.parquet"
-    row_count = compact_with_pandas(input_files, output_file)
-    print(f"Compacted {len(input_files)} files into {output_file} ({row_count} rows).")
+    pandas_output = data_directory / "pandas.parquet"
+    row_count = compact_with_pandas(input_files, pandas_output)
+    print(
+        f"Compacted {len(input_files)} files into {pandas_output} ({row_count} rows)."
+    )
+
+    duckdb_output = data_directory / "duckdb.parquet"
+    compact_with_duckdb(input_files, duckdb_output)
+    print(f"Compacted {len(input_files)} files into {duckdb_output}.")
 
 
 if __name__ == "__main__":
