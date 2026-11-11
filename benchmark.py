@@ -67,6 +67,27 @@ def compact_with_duckdb(input_files: list[Path], output_file: Path) -> None:
         )
 
 
+def validate_outputs(input_files: list[Path], output_files: list[Path]) -> None:
+    source_rows = pd.concat(
+        [pd.read_parquet(path, engine="pyarrow") for path in input_files],
+        ignore_index=True,
+    ).sort_values("event_id", ignore_index=True)
+
+    for output_file in output_files:
+        try:
+            output_rows = pd.read_parquet(output_file, engine="pyarrow").sort_values(
+                "event_id", ignore_index=True
+            )
+            # The writers can represent the same values with different dtypes.
+            pd.testing.assert_frame_equal(
+                source_rows, output_rows, check_dtype=False, check_exact=True
+            )
+        except (AssertionError, KeyError) as error:
+            raise ValueError(
+                f"{output_file.name} does not match the source rows"
+            ) from error
+
+
 def main() -> None:
     data_directory = Path(__file__).resolve().parent / "benchmark_data"
     input_files = generate_input_files(data_directory / "inputs")
@@ -79,6 +100,9 @@ def main() -> None:
     duckdb_output = data_directory / "duckdb.parquet"
     compact_with_duckdb(input_files, duckdb_output)
     print(f"Compacted {len(input_files)} files into {duckdb_output}.")
+
+    validate_outputs(input_files, [pandas_output, duckdb_output])
+    print("Both outputs match the source rows.")
 
 
 if __name__ == "__main__":

@@ -7,3 +7,6 @@ dependencies = [
     "pandas",
     "pyarrow",
 ]
+
+[dependency-groups]
+test = ["pytest"]
